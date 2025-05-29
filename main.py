@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import base64
+from telethon.sync import TelegramClient
 
 # Создаем приложение FastAPI
 app = FastAPI(
