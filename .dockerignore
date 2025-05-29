@@ -1,25 +1,8 @@
-# исключаем гит-репо  
-.git  
-.gitignore  
-
-# Python-виртуалки  
-venv/  
-env/  
-.venv/  
-
-# Артефакты сборки  
-__pycache__/  
-*.pyc  
-*.pyo  
-*.pyd  
-*.egg-info/  
-dist/  
-build/  
-pip-wheel-metadata/  
-
-# IDE, логи и прочее  
-*.log  
-.DS_Store  
-.vscode/  
-.idea/  
-.env  
+.git
+__pycache__/
+*.pyc
+venv/
+env/
+.env
+*.log
+.DS_Store
