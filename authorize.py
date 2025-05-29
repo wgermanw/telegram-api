@@ -5,20 +5,22 @@ from telethon.sync import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 
 def authorize_telegram():
-    # Проверяем, что заданы API_ID и API_HASH
+    # Читаем из окружения
     api_id = os.getenv("TELEGRAM_API_ID")
     api_hash = os.getenv("TELEGRAM_API_HASH")
     if not api_id or not api_hash:
         print("❌ Не заданы переменные окружения TELEGRAM_API_ID и/или TELEGRAM_API_HASH")
         return
+
+    # Проверяем, что API_ID — это число
     try:
         api_id = int(api_id)
     except ValueError:
         print("❌ Переменная TELEGRAM_API_ID должна быть целым числом")
         return
 
-    # Запрашиваем у пользователя номер телефона
-    phone = input("Введите номер телефона (с префиксом, например +7 или +375): ")
+    # Запрос номера телефона
+    phone = input("Введите номер телефона (с +7 или +375): ")
 
     client = TelegramClient('session', api_id, api_hash)
     try:
@@ -32,20 +34,20 @@ def authorize_telegram():
                 pwd = input("Введите пароль двухфакторной аутентификации: ")
                 client.sign_in(password=pwd)
 
-        # Читаем файл сессии и кодируем его в base64
+        # Читаем файл сессии и кодируем в base64
         session_file = client.session.filename
-        with open(session_file, "rb") as f:
+        with open(session_file, 'rb') as f:
             session_bytes = f.read()
         session_b64 = base64.b64encode(session_bytes).decode()
 
         print("\n🚀 Base64-строка сессии Telegram:")
         print(session_b64)
-        print("\nСкопируйте её в переменную окружения TELEGRAM_SESSION в вашем Railway-проекте.")
+        print("\nСкопируйте её в переменную окружения TELEGRAM_SESSION вашего Railway-проекта.")
     except Exception as e:
         print(f"❌ Ошибка авторизации: {e}")
     finally:
         client.disconnect()
 
 if __name__ == "__main__":
-    print("🔐 Запуск авторизации Telegram для Railway")
+    print("🔐 Запуск авторизации Telegram")
     authorize_telegram()
