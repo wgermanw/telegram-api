@@ -5,6 +5,7 @@ import subprocess
 import json
 import os
 import sys
+import base64
 
 # Создаем приложение FastAPI
 app = FastAPI(
@@ -28,6 +29,21 @@ async def verify_api_key(credentials = Depends(security)):
         raise HTTPException(status_code=401, detail="Invalid API key")
     return credentials
 
+def restore_telegram_session():
+    """Восстанавливает сессию Telegram из переменной окружения"""
+    session_data = os.getenv("TELEGRAM_SESSION")
+    if session_data:
+        try:
+            # Декодируем base64 обратно в файл
+            session_bytes = base64.b64decode(session_data)
+            with open('session_name.session', 'wb') as f:
+                f.write(session_bytes)
+            return True
+        except Exception as e:
+            print(f"Error restoring session: {e}")
+            return False
+    return False
+
 def create_telegram_worker():
     """Создает скрипт для работы с Telegram"""
     api_id = os.getenv("TELEGRAM_API_ID")
@@ -35,6 +51,9 @@ def create_telegram_worker():
     
     if not api_id or not api_hash:
         return None
+    
+    # Восстанавливаем сессию перед каждым использованием
+    restore_telegram_session()
     
     script_content = f'''
 import sys
@@ -183,13 +202,28 @@ async def root():
     return {
         "message": "Telegram API Bridge is running!",
         "docs": "/docs",
-        "endpoints": ["/send_message", "/status", "/health"]
+        "endpoints": ["/send_message", "/status", "/health", "/debug"]
     }
 
 @app.get("/health")
 async def health():
     """Проверка здоровья сервера (без авторизации)"""
     return {"status": "healthy", "service": "telegram-api"}
+
+@app.get("/debug")
+async def debug():
+    """Временный endpoint для отладки - УДАЛИТЕ В ПРОДАКШЕНЕ!"""
+    api_secret = os.getenv("API_SECRET")
+    return {
+        "api_secret_exists": bool(api_secret),
+        "api_secret_length": len(api_secret) if api_secret else 0,
+        "api_secret_first_3": api_secret[:3] + "..." if api_secret else None,
+        "api_key_exists": bool(os.getenv("API_KEY")),
+        "telegram_api_id_exists": bool(os.getenv("TELEGRAM_API_ID")),
+        "telegram_api_hash_exists": bool(os.getenv("TELEGRAM_API_HASH")),
+        "telegram_session_exists": bool(os.getenv("TELEGRAM_SESSION")),
+        "all_env_vars": list(os.environ.keys())
+    }
 
 @app.get("/status")
 async def status(credentials = Depends(verify_api_key)):
@@ -231,4 +265,6 @@ async def send_message(
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
+    print(f"Starting server on port {port}")
+    print(f"API_SECRET exists: {bool(os.getenv('API_SECRET'))}")
     uvicorn.run(app, host="0.0.0.0", port=port)
