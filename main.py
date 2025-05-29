@@ -1,277 +1,198 @@
+import os
+import sys
+import json
+import subprocess
+import base64
+
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import HTTPBearer
 from pydantic import BaseModel
-import subprocess
-import json
-import os
-import sys
-import base64
 from telethon.sync import TelegramClient
 
-# Создаем приложение FastAPI
+# ————— Configuration —————
+API_ID = os.getenv("TELEGRAM_API_ID")
+API_HASH = os.getenv("TELEGRAM_API_HASH")
+API_SECRET = os.getenv("API_SECRET")
+TELEGRAM_SESSION_ENV = os.getenv("TELEGRAM_SESSION")
+
+SESSION_NAME = "session"
+SESSION_FILE = f"{SESSION_NAME}.session"
+
+# ————— FastAPI setup —————
 app = FastAPI(
     title="Telegram API Bridge",
-    description="Отправка сообщений в Telegram через API",
+    description="Send messages via Telegram",
     version="1.0.0"
 )
-
-# Безопасность
 security = HTTPBearer()
 
-# Модель данных для запроса
+
+# ————— Models & Auth —————
 class MessageRequest(BaseModel):
     user: str
     text: str
 
-# Проверка API ключа
-async def verify_api_key(credentials = Depends(security)):
-    api_secret = os.getenv("API_SECRET", "default-secret-change-me")
-    if credentials.credentials != api_secret:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    return credentials
 
-def restore_telegram_session():
-    """Восстанавливает сессию Telegram из переменной окружения"""
-    session_data = os.getenv("TELEGRAM_SESSION")
-    if session_data:
+async def verify_api_key(credentials=Depends(security)):
+    """
+    Проверка HTTP Bearer токена (API_SECRET).
+    """
+    if not API_SECRET or credentials.credentials != API_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+# ————— Session management —————
+def restore_telegram_session() -> bool:
+    """
+    Если задана TELEGRAM_SESSION (base64), раскодировать её в файл сессии.
+    """
+    if TELEGRAM_SESSION_ENV:
         try:
-            # Декодируем base64 обратно в файл
-            session_bytes = base64.b64decode(session_data)
-            with open('session_name.session', 'wb') as f:
-                f.write(session_bytes)
+            data = base64.b64decode(TELEGRAM_SESSION_ENV)
+            with open(SESSION_FILE, "wb") as f:
+                f.write(data)
             return True
         except Exception as e:
-            print(f"Error restoring session: {e}")
-            return False
+            print(f"Error restoring Telegram session: {e}")
     return False
 
-def create_telegram_worker():
-    """Создает скрипт для работы с Telegram"""
-    api_id = os.getenv("TELEGRAM_API_ID")
-    api_hash = os.getenv("TELEGRAM_API_HASH")
-    
-    if not api_id or not api_hash:
+
+def create_telegram_worker() -> str | None:
+    """
+    Генерирует скрипт для взаимодействия с Telethon,
+    возвращает путь к нему или None, если не заданы API_ID/API_HASH.
+    """
+    if not API_ID or not API_HASH:
         return None
-    
-    # Восстанавливаем сессию перед каждым использованием
+
+    # Восстанавливаем сессию (если есть в переменной)
     restore_telegram_session()
-    
-    script_content = f'''
-import sys
-import json
+
+    script = f'''import sys
 import os
+import json
+from telethon.sync import TelegramClient
 
-try:
-    from telethon.sync import TelegramClient
-    from telethon.errors import SessionPasswordNeededError
-except ImportError as e:
-    print(json.dumps({{"error": f"Telethon not installed: {{str(e)}}"}}))
-    sys.exit(1)
-
-api_id = {api_id}
-api_hash = "{api_hash}"
-
-def send_message(user, text):
-    client = None
-    try:
-        client = TelegramClient('session_name', api_id, api_hash)
-        client.connect()
-        
-        if not client.is_user_authorized():
-            return {{"error": "Not authorized. Please authorize first."}}
-        
-        client.send_message(user, text)
-        return {{"status": "success", "message": f"Message sent to {{user}}"}}
-        
-    except Exception as e:
-        return {{"error": f"Send error: {{str(e)}}"}}
-    finally:
-        if client:
-            try:
-                client.disconnect()
-            except:
-                pass
-
-def check_status():
-    client = None
-    try:
-        client = TelegramClient('session_name', api_id, api_hash)
-        client.connect()
-        
-        is_authorized = client.is_user_authorized()
-        is_connected = client.is_connected()
-        
-        return {{
-            "status": "ok",
-            "authorized": is_authorized,
-            "connected": is_connected,
-            "session_exists": os.path.exists('session_name.session')
-        }}
-        
-    except Exception as e:
-        return {{"status": "error", "error": str(e)}}
-    finally:
-        if client:
-            try:
-                client.disconnect()
-            except:
-                pass
+api_id = {API_ID}
+api_hash = "{API_HASH}"
+session_name = "{SESSION_NAME}"
 
 def main():
     if len(sys.argv) < 2:
-        print(json.dumps({{"error": "No command specified"}}))
-        return
-    
+        print(json.dumps({{"error":"No command provided"}}))
+        sys.exit(1)
     command = sys.argv[1]
-    
-    if command == "send":
-        if len(sys.argv) < 4:
-            print(json.dumps({{"error": "Usage: send <user> <text>"}}))
-            return
-        
-        user = sys.argv[2]
-        text = " ".join(sys.argv[3:])
-        result = send_message(user, text)
-        print(json.dumps(result))
-        
-    elif command == "status":
-        result = check_status()
-        print(json.dumps(result))
-        
-    else:
-        print(json.dumps({{"error": f"Unknown command: {{command}}"}}))
+    args = sys.argv[2:]
+    client = TelegramClient(session_name, api_id, api_hash)
+    try:
+        client.connect()
+        if command == "send":
+            if len(args) < 2:
+                print(json.dumps({{"error":"Missing arguments"}}))
+                sys.exit(1)
+            user, text = args[0], args[1]
+            client.send_message(user, text)
+            print(json.dumps({{"status":"success","message":"Message sent to " + user}}))
+        elif command == "status":
+            auth = client.is_user_authorized()
+            conn = client.is_connected()
+            exists = os.path.exists(session_name + ".session")
+            print(json.dumps({{"status":"ok","authorized":auth,"connected":conn,"session_exists":exists}}))
+        else:
+            print(json.dumps({{"error":"Unknown command: " + command}}))
+    except Exception as e:
+        print(json.dumps({{"error":str(e)}}))
+    finally:
+        client.disconnect()
 
 if __name__ == "__main__":
     main()
 '''
-    
-    script_path = 'telegram_worker.py'
-    with open(script_path, 'w', encoding='utf-8') as f:
-        f.write(script_content)
-    return script_path
+    path = "telegram_worker.py"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(script)
+    return path
 
-def run_telegram_command(command, *args):
-    """Выполняет команду Telegram"""
-    script_path = create_telegram_worker()
-    
-    if not script_path:
-        return {'error': 'Missing TELEGRAM_API_ID or TELEGRAM_API_HASH environment variables'}
-    
+
+def run_telegram_command(command: str, *args: str) -> dict:
+    """
+    Запускает сгенерированный скрипт с указанной командой и аргументами.
+    """
+    worker = create_telegram_worker()
+    if not worker:
+        return {"error": "Missing TELEGRAM_API_ID or TELEGRAM_API_HASH"}
+
     try:
-        cmd = [sys.executable, script_path, command] + list(args)
-        
-        result = subprocess.run(
+        cmd = [sys.executable, worker, command, *args]
+        proc = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=60,
-            cwd=os.getcwd(),
-            encoding='utf-8'
         )
-        
-        if result.returncode == 0:
-            try:
-                output = result.stdout.strip()
-                if output:
-                    return json.loads(output)
-                else:
-                    return {'error': 'No output from script'}
-            except json.JSONDecodeError as e:
-                return {'error': f'JSON decode error: {e}', 'raw_output': result.stdout}
-        else:
+        if proc.returncode != 0:
             return {
-                'error': f'Process failed with code {result.returncode}',
-                'stderr': result.stderr,
-                'stdout': result.stdout
+                "error": f"Process failed ({proc.returncode})",
+                "stderr": proc.stderr.strip(),
+                "stdout": proc.stdout.strip()
             }
-    
-    except subprocess.TimeoutExpired:
-        return {'error': 'Command timeout (60 seconds)'}
-    except Exception as e:
-        return {'error': f'Subprocess error: {str(e)}'}
-    finally:
         try:
-            if script_path and os.path.exists(script_path):
-                os.remove(script_path)
-        except:
-            pass
+            return json.loads(proc.stdout.strip())
+        except json.JSONDecodeError as e:
+            return {"error": f"JSON decode error: {e}", "raw": proc.stdout}
+    except Exception as e:
+        return {"error": f"Exception running command: {e}"}
 
-# API Endpoints
+
+# ————— Endpoints —————
 @app.get("/")
 async def root():
-    """Главная страница"""
     return {
         "message": "Telegram API Bridge is running!",
         "docs": "/docs",
         "endpoints": ["/send_message", "/status", "/health", "/debug"]
     }
 
+
 @app.get("/health")
 async def health():
-    """Проверка здоровья сервера (без авторизации)"""
     return {"status": "healthy", "service": "telegram-api"}
+
 
 @app.get("/debug")
 async def debug():
-    """Временный endpoint для отладки - УДАЛИТЕ В ПРОДАКШЕНЕ!"""
-    api_secret = os.getenv("API_SECRET")
     return {
-        "api_secret_exists": bool(api_secret),
-        "api_secret_length": len(api_secret) if api_secret else 0,
-        "api_secret_first_3": api_secret[:3] + "..." if api_secret else None,
-        "api_key_exists": bool(os.getenv("API_KEY")),
-        "telegram_api_id_exists": bool(os.getenv("TELEGRAM_API_ID")),
-        "telegram_api_hash_exists": bool(os.getenv("TELEGRAM_API_HASH")),
-        "telegram_session_exists": bool(os.getenv("TELEGRAM_SESSION")),
-        "all_env_vars": list(os.environ.keys())
+        "api_secret_exists": bool(API_SECRET),
+        "telegram_api_id_exists": bool(API_ID),
+        "telegram_api_hash_exists": bool(API_HASH),
+        "telegram_session_env_exists": bool(TELEGRAM_SESSION_ENV),
+        "session_file_exists": os.path.exists(SESSION_FILE)
     }
 
+
 @app.get("/status")
-async def status(credentials = Depends(verify_api_key)):
-    """Статус Telegram подключения"""
-    result = run_telegram_command('status')
-    return result
+async def status(credentials=Depends(verify_api_key)):
+    """Проверяет, подключён ли TelegramClient."""
+    return run_telegram_command("status")
+
 
 @app.post("/send_message")
-async def send_message(
-    message: MessageRequest,
-    credentials = Depends(verify_api_key)
-):
-    """Отправка сообщения в Telegram"""
-    
-    if not message.user or not message.text:
+async def send_message(payload: MessageRequest, credentials=Depends(verify_api_key)):
+    """Отправка сообщения в Telegram."""
+    if not payload.user or not payload.text.strip():
         raise HTTPException(status_code=400, detail="user and text are required")
-    
-    if len(message.text.strip()) == 0:
-        raise HTTPException(status_code=400, detail="Empty message")
-    
-    try:
-        result = run_telegram_command('send', message.user, message.text)
-        
-        if 'error' in result:
-            raise HTTPException(status_code=500, detail=result['error'])
-        
-        return {
-            "status": "success",
-            "message": f"Message sent to {message.user}",
-            "text": message.text
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+    result = run_telegram_command("send", payload.user, payload.text)
+    if "error" in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+    return {
+        "status": "success",
+        "message": f"Message sent to {payload.user}",
+        "text": payload.text
+    }
 
-# Для Railway.app нужно указать порт
+
+# ————— Launch —————
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    print(f"Starting server on port {port}")
-    print(f"API_SECRET exists: {bool(os.getenv('API_SECRET'))}")
-    uvicorn.run(app, host="0.0.0.0", port=port)
-# Для Railway.app: берём порт из окружения
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    print(f"Starting server on port {port}")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
